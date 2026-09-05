@@ -1,61 +1,99 @@
-// App Router Route: POST /api/portfolio
 import { NextResponse } from 'next/server';
-import type { StockData } from '@/lib/stockData';
-import { getStockData } from '@/lib/stockData';
-import { calculatePortfolioMetrics } from '@/lib/portfolioCalculations';
-import type { PositionWithData, PortfolioMetrics } from '@/lib/portfolioCalculations';
+import { calculatePortfolioMetrics, type PositionWithData } from '@/lib/portfolioCalculations';
+import { calculateEfficientFrontier } from '@/lib/efficientFrontier';
+import { getStockData, type StockData, type Timeframe } from '@/lib/stockData';
+import { MarketDataApiError, MarketDataResponseError } from '@/lib/marketDataClient';
 
-// Error response format
-type ErrorResponse = { error: string };
+interface PositionInput {
+  ticker: string;
+  quantity: number;
+  averagePrice: number;
+  positionType: 'long' | 'short';
+}
 
-// Expect request body:
-// {
-//   positions: Array<{
-//     ticker: string;
-//     quantity: number;
-//     averagePrice: number;
-//     positionType: 'long' | 'short';
-//   }>,
-//   timeframe?: '1d' | '1w' | '1m' | '1y'
-// }
-// POST /api/portfolio
+function parsePositions(value: unknown): PositionInput[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 50) {
+    throw new RangeError('positions must contain between 1 and 50 entries');
+  }
+
+  return value.map((item, index) => {
+    if (typeof item !== 'object' || item === null) {
+      throw new TypeError(`positions[${index}] must be an object`);
+    }
+    const position = item as Record<string, unknown>;
+    const ticker = typeof position.ticker === 'string' ? position.ticker.trim().toUpperCase() : '';
+    if (!/^[A-Z][A-Z0-9./-]{0,9}$/.test(ticker)) {
+      throw new TypeError(`positions[${index}].ticker is invalid`);
+    }
+    if (typeof position.quantity !== 'number' || !Number.isFinite(position.quantity) || position.quantity <= 0) {
+      throw new RangeError(`positions[${index}].quantity must be greater than zero`);
+    }
+    if (typeof position.averagePrice !== 'number' || !Number.isFinite(position.averagePrice) || position.averagePrice <= 0) {
+      throw new RangeError(`positions[${index}].averagePrice must be greater than zero`);
+    }
+    if (position.positionType !== 'long' && position.positionType !== 'short') {
+      throw new TypeError(`positions[${index}].positionType must be "long" or "short"`);
+    }
+    return {
+      ticker,
+      quantity: position.quantity,
+      averagePrice: position.averagePrice,
+      positionType: position.positionType,
+    };
+  });
+}
+
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    if (!body.positions || !Array.isArray(body.positions)) {
-      return NextResponse.json({ error: 'Missing positions array' }, { status: 400 });
+    const body: unknown = await request.json();
+    if (typeof body !== 'object' || body === null) {
+      throw new TypeError('Request body must be a JSON object');
     }
-    const { positions, timeframe = '1y' } = body as {
-      positions: Omit<PositionWithData, 'currentPrice' | 'historicalData'>[];
-      timeframe?: '1d'|'1w'|'1m'|'1y';
-    };
+    const payload = body as Record<string, unknown>;
+    const positions = parsePositions(payload.positions);
+    const timeframe = payload.timeframe ?? '1y';
+    if (timeframe !== '1m' && timeframe !== '1y') {
+      throw new TypeError('timeframe must be "1m" or "1y"');
+    }
 
-    // 1) Fetch historical bars for each stock
-    const enrichedPositions: PositionWithData[] = await Promise.all(
-      positions.map(async pos => {
-        const hist = await getStockData(pos.ticker, timeframe);
-        const latest = hist[hist.length - 1].close;
-        return {
-          ...pos,
-          historicalData: hist,
-          currentPrice: latest,
-        };
-      })
-    );
+    const tickers = [...new Set([...positions.map(({ ticker }) => ticker), 'SPY'])];
+    const series = new Map<string, StockData[]>(await Promise.all(
+      tickers.map(async (ticker) => [ticker, await getStockData(ticker, timeframe as Timeframe)] as const)
+    ));
+    const enrichedPositions: PositionWithData[] = positions.map((position) => {
+      const historicalData = series.get(position.ticker);
+      if (!historicalData?.length) {
+        throw new Error(`No price history returned for ${position.ticker}`);
+      }
+      return {
+        ...position,
+        historicalData,
+        currentPrice: historicalData[historicalData.length - 1].close,
+      };
+    });
+    const benchmarkData = series.get('SPY');
+    if (!benchmarkData) throw new Error('No benchmark history returned for SPY');
 
-    // 2) Fetch benchmark series (e.g., S&P 500)
-    const benchmarkData: StockData[] = await getStockData('SPY', timeframe);
-
-    // 3) Compute metrics via CAPM
-    const metrics: PortfolioMetrics = calculatePortfolioMetrics(
-      enrichedPositions,
-      benchmarkData
-    );
-
-    return NextResponse.json(metrics);
-  } catch (err: unknown) {
-    console.error(err);
-    const errorMessage = err instanceof Error ? err.message : 'Internal Server Error';
-    return NextResponse.json<ErrorResponse>({ error: errorMessage }, { status: 500 });
+    const annualRiskFreeRate = 0.03;
+    return NextResponse.json({
+      ...calculatePortfolioMetrics(enrichedPositions, benchmarkData, annualRiskFreeRate),
+      efficientFrontier: calculateEfficientFrontier(enrichedPositions, annualRiskFreeRate),
+    });
+  } catch (error: unknown) {
+    if (error instanceof MarketDataApiError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.status === 429 ? 429 : error.status === 401 ? 503 : 502 }
+      );
+    }
+    if (error instanceof MarketDataResponseError) {
+      return NextResponse.json({ error: error.message }, { status: 502 });
+    }
+    if (error instanceof SyntaxError || error instanceof TypeError || error instanceof RangeError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    const message = error instanceof Error ? error.message : 'Internal server error';
+    console.error('Portfolio analysis failed:', error);
+    return NextResponse.json({ error: message }, { status: 502 });
   }
 }

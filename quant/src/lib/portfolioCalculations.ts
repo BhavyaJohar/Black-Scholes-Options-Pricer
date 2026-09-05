@@ -1,3 +1,8 @@
+export interface StockData {
+  date: string;
+  close: number;
+}
+
 export interface PositionWithData {
   ticker: string;
   quantity: number;
@@ -8,102 +13,140 @@ export interface PositionWithData {
 }
 
 export interface PortfolioMetrics {
-  // total return as a decimal (profit / cost basis)
   totalReturn: number;
   alpha: number;
   beta: number;
   sharpeRatio: number;
-  // array of daily portfolio returns (fractional), in the same order as common dates
+  annualizedVolatility: number;
+  maxDrawdown: number;
+  valueAtRisk95: number;
   dailyReturns: number[];
+  observations: number;
 }
 
-interface StockData {
-  date: string;
-  close: number;
+const TRADING_DAYS = 252;
+
+function mean(values: number[]): number {
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function sampleVariance(values: number[], average: number): number {
+  return values.reduce((sum, value) => sum + (value - average) ** 2, 0)
+    / (values.length - 1);
+}
+
+function calculateMaxDrawdown(returns: number[]): number {
+  let wealth = 1;
+  let peak = 1;
+  let maxDrawdown = 0;
+  for (const dailyReturn of returns) {
+    wealth *= 1 + dailyReturn;
+    peak = Math.max(peak, wealth);
+    maxDrawdown = Math.max(maxDrawdown, (peak - wealth) / peak);
+  }
+  return maxDrawdown;
 }
 
 export function calculatePortfolioMetrics(
   positions: PositionWithData[],
-  benchmarkHistoricalData: StockData[]
+  benchmarkHistoricalData: StockData[],
+  annualRiskFreeRate = 0.03
 ): PortfolioMetrics {
-  // 1) Compute cost basis and weights at purchase
-  const costs = positions.map(p => p.quantity * p.averagePrice);
-  const totalCost = costs.reduce((a, b) => a + b, 0);
-  const weights = costs.map(c => c / totalCost);
+  if (positions.length === 0) {
+    throw new RangeError('At least one position is required');
+  }
+  if (!Number.isFinite(annualRiskFreeRate)) {
+    throw new RangeError('Risk-free rate must be finite');
+  }
 
-  // 2) Build date‐aligned price maps
-  const benchmarkMap = new Map(benchmarkHistoricalData.map(d => [d.date, d.close]));
-  const positionMaps = positions.map(p =>
-    new Map(p.historicalData.map(d => [d.date, d.close]))
+  const grossExposures = positions.map((position) => {
+    if (
+      !Number.isFinite(position.quantity)
+      || !Number.isFinite(position.averagePrice)
+      || !Number.isFinite(position.currentPrice)
+      || position.quantity <= 0
+      || position.averagePrice <= 0
+      || position.currentPrice <= 0
+    ) {
+      throw new RangeError(`Invalid prices or quantity for ${position.ticker}`);
+    }
+    return position.quantity * position.averagePrice;
+  });
+  const grossCapital = grossExposures.reduce((sum, exposure) => sum + exposure, 0);
+  const weights = grossExposures.map((exposure) => exposure / grossCapital);
+
+  const benchmarkMap = new Map(benchmarkHistoricalData.map(({ date, close }) => [date, close]));
+  const positionMaps = positions.map((position) =>
+    new Map(position.historicalData.map(({ date, close }) => [date, close]))
   );
-
   const commonDates = [...benchmarkMap.keys()]
-    .filter(date => positionMaps.every(m => m.has(date)))
+    .filter((date) => positionMaps.every((priceMap) => priceMap.has(date)))
     .sort();
 
-  // 3) Compute daily *individual* returns, then portfolio return = ∑ wᵢ·rᵢ
-  const dailyRp: number[] = [];
-  const dailyRm: number[] = [];
-  for (let i = 1; i < commonDates.length; i++) {
-    const prev = commonDates[i - 1];
-    const curr = commonDates[i];
+  if (commonDates.length < 3) {
+    throw new RangeError('At least three aligned price observations are required');
+  }
 
-    // market return
-    const prevMarketPrice = benchmarkMap.get(prev);
-    const currMarketPrice = benchmarkMap.get(curr);
-    if (prevMarketPrice === undefined || currMarketPrice === undefined) continue;
-    const rm = (currMarketPrice - prevMarketPrice) / prevMarketPrice;
-    dailyRm.push(rm);
-
-    // portfolio return as weighted sum, flipping for shorts
-    let rp = 0;
-    for (let j = 0; j < positions.length; j++) {
-      const m = positionMaps[j];
-      const prevPrice = m.get(prev);
-      const currPrice = m.get(curr);
-      if (prevPrice === undefined || currPrice === undefined) continue;
-      const r = (currPrice - prevPrice) / prevPrice;
-      const sign = positions[j].positionType === 'short' ? -1 : 1;
-      rp += weights[j] * sign * r;
+  const dailyReturns: number[] = [];
+  const benchmarkReturns: number[] = [];
+  for (let index = 1; index < commonDates.length; index += 1) {
+    const previousDate = commonDates[index - 1];
+    const currentDate = commonDates[index];
+    const previousBenchmark = benchmarkMap.get(previousDate);
+    const currentBenchmark = benchmarkMap.get(currentDate);
+    if (!previousBenchmark || !currentBenchmark) {
+      throw new RangeError('Benchmark prices must be greater than zero');
     }
-    dailyRp.push(rp);
+
+    benchmarkReturns.push((currentBenchmark - previousBenchmark) / previousBenchmark);
+    dailyReturns.push(positions.reduce((portfolioReturn, position, positionIndex) => {
+      const previousPrice = positionMaps[positionIndex].get(previousDate);
+      const currentPrice = positionMaps[positionIndex].get(currentDate);
+      if (!previousPrice || !currentPrice) {
+        throw new RangeError(`Historical prices for ${position.ticker} must be greater than zero`);
+      }
+      const direction = position.positionType === 'short' ? -1 : 1;
+      const positionReturn = direction * (currentPrice - previousPrice) / previousPrice;
+      return portfolioReturn + weights[positionIndex] * positionReturn;
+    }, 0));
   }
 
-  // 4) Total Return = ∑ wᵢ·(position return), adjusted for position type
-  const totalReturn = positions
-    .map((p, i) => {
-      const raw = (p.currentPrice - p.averagePrice) / p.averagePrice;
-      const sign = p.positionType === 'short' ? -1 : 1;
-      return weights[i] * sign * raw;
-    })
-    .reduce((a, b) => a + b, 0);
+  const totalReturn = positions.reduce((portfolioReturn, position, index) => {
+    const direction = position.positionType === 'short' ? -1 : 1;
+    const positionReturn = direction
+      * (position.currentPrice - position.averagePrice) / position.averagePrice;
+    return portfolioReturn + weights[index] * positionReturn;
+  }, 0);
 
-  // 5) CAPM on **excess** returns
-  const riskFreeRate = 0.03;                // 3% annual
-  const drf = riskFreeRate / 252;           // simple daily rf
-  const excessRp = dailyRp.map(r => r - drf);
-  const excessRm = dailyRm.map(r => r - drf);
+  const dailyRiskFreeRate = annualRiskFreeRate / TRADING_DAYS;
+  const excessPortfolioReturns = dailyReturns.map((value) => value - dailyRiskFreeRate);
+  const excessBenchmarkReturns = benchmarkReturns.map((value) => value - dailyRiskFreeRate);
+  const averagePortfolioReturn = mean(excessPortfolioReturns);
+  const averageBenchmarkReturn = mean(excessBenchmarkReturns);
+  const benchmarkVariance = sampleVariance(excessBenchmarkReturns, averageBenchmarkReturn);
+  const covariance = excessPortfolioReturns.reduce((sum, value, index) =>
+    sum + (value - averagePortfolioReturn)
+      * (excessBenchmarkReturns[index] - averageBenchmarkReturn), 0)
+    / (excessPortfolioReturns.length - 1);
+  const beta = benchmarkVariance === 0 ? 0 : covariance / benchmarkVariance;
+  const alpha = (averagePortfolioReturn - beta * averageBenchmarkReturn) * TRADING_DAYS;
+  const portfolioVariance = sampleVariance(excessPortfolioReturns, averagePortfolioReturn);
+  const dailyVolatility = Math.sqrt(portfolioVariance);
+  const sharpeRatio = dailyVolatility === 0
+    ? 0
+    : averagePortfolioReturn / dailyVolatility * Math.sqrt(TRADING_DAYS);
+  const sortedReturns = [...dailyReturns].sort((a, b) => a - b);
+  const fifthPercentile = sortedReturns[Math.floor((sortedReturns.length - 1) * 0.05)];
 
-  const n = excessRp.length;
-  const avgExRp = excessRp.reduce((a, b) => a + b, 0) / n;
-  const avgExRm = excessRm.reduce((a, b) => a + b, 0) / n;
-
-  // sample covariance & variance (ddof=1)
-  let cov = 0 
-  let varM = 0;
-  for (let i = 0; i < n; i++) {
-    cov  += (excessRp[i] - avgExRp) * (excessRm[i] - avgExRm);
-    varM += (excessRm[i] - avgExRm) ** 2;
-  }
-  cov  /= (n - 1);
-  varM /= (n - 1);
-  const beta = varM === 0 ? 0 : cov / varM;
-  const alpha = (avgExRp - beta * avgExRm) * 252;  // annualized
-
-  // 6) Sharpe = E[exRp] / σ(exRp) * √252, with sample σ
-  const sumSq = excessRp.reduce((acc, r) => acc + (r - avgExRp) ** 2, 0);
-  const stdExRp = Math.sqrt(sumSq / (n - 1));
-  const sharpeRatio = stdExRp === 0 ? 0 : (avgExRp / stdExRp) * Math.sqrt(252);
-
-  return { totalReturn, alpha, beta, sharpeRatio, dailyReturns: dailyRp };
+  return {
+    totalReturn,
+    alpha,
+    beta,
+    sharpeRatio,
+    annualizedVolatility: dailyVolatility * Math.sqrt(TRADING_DAYS),
+    maxDrawdown: calculateMaxDrawdown(dailyReturns),
+    valueAtRisk95: Math.max(0, -fifthPercentile),
+    dailyReturns,
+    observations: dailyReturns.length,
+  };
 }

@@ -1,216 +1,146 @@
-# Options & Portfolio Analysis Tool
+# Options & Portfolio Risk Lab
 
-A comprehensive Next.js‑based financial analysis platform that combines real‑time market data with theoretical models for options pricing and portfolio analysis. Built with modern web technologies and designed for both retail and professional investors.
+A typed Next.js research terminal for option valuation, delayed volatility-surface diagnostics, and equity-portfolio risk. The project emphasizes transparent numerical methods, explicit assumptions, reproducible simulation, and validated market-data boundaries.
 
----
+[Live demo](https://bhavyas-options-pricing.vercel.app/) · [Author](https://bhavyarjohar.com)
 
-## Features
+## What it does
 
-### Authentication & User Management
-- **Secure User Authentication**  
-  - User registration and login system
-  - Password hashing with bcrypt
-  - Session management with local storage
-  - Protected API endpoints
+### Option valuation
 
-### Options Analysis
-- **Stock Price Lookup**  
-  Fetch live stock prices from Polygon.io by ticker symbol.
+- Black-Scholes-Merton prices and analytical Delta, Gamma, Theta, Vega, and Rho
+- Continuous dividend-yield support
+- Cox-Ross-Rubinstein lattice for European and American exercise
+- Expiration payoff and break-even visualization
+- 11×9 option-price heatmap across spot and volatility shocks
+- Manual spot input, so the calculator works with no account or API key
+- Stable bisection solver for European-equivalent implied volatility
+- Optional delayed stock snapshots through Market Data
 
-- **Black‑Scholes Pricing & Greeks**  
-  Calculate theoretical call/put prices and the full suite of Greeks (Delta, Gamma, Theta, Vega, Rho).
+### Delayed options surface
 
-- **Binomial Tree Pricing**  
-  Price options (including American‑style) via a Cox‑Ross‑Rubinstein binomial tree.
+- Market Data option-chain snapshots with quotes, vendor IV, Greeks, volume, and open interest
+- Independent midpoint-IV inversion and vendor/model IV residuals
+- Bid/ask spread diagnostics and nearest-to-money contract ranking
+- Volatility-smile visualization and one-click transfer into the pricing model
+- Explicit snapshot timestamps and provider credit metadata
 
-- **Interactive Payoff Diagrams**  
-  Static expiration payoff curves with red/green shading for negative/positive P&L, plus reference lines for strike, current, and break‑even prices.
+### Portfolio risk
 
-- **Bento UI**  
-  A modern, responsive grid layout to build positions manually:  
-  - Ticker  
-  - Strike Price  
-  - Option Type (Call/Put)  
-  - Position (Long/Short)  
-  - Days to Expiration  
-  - Premium
+- Long/short, gross-capital-weighted daily returns aligned by trading date
+- CAPM alpha and beta against SPY
+- Annualized Sharpe ratio and volatility
+- Maximum drawdown and one-day 95% historical VaR
+- Seeded, reproducible Monte Carlo projection over log returns
+- Deterministic mean-variance portfolio cloud with an approximate efficient frontier
+- Minimum-volatility and maximum-Sharpe portfolios, current exposure, and capital market line
+- Local browser persistence; no database is required
 
-### Portfolio Analysis
-- **Portfolio Management**  
-  - User-specific portfolio storage
-  - Add and manage multiple positions
-  - Track long and short positions
-  - Real-time portfolio value calculation
-  - Position distribution visualization
-  - Save and load multiple portfolios
-  - Intuitive dropdown interface for portfolio management
+## Research workflows
 
-- **Advanced Analytics**  
-  - Alpha/Beta analysis
-  - Sharpe Ratio calculation
-  - Total Return metrics
-  - Monte Carlo simulations for risk assessment
+| Route | Workspace | Purpose |
+| --- | --- | --- |
+| [`/`](quant/src/app/page.tsx) | Option Pricing Workbench | Price a European or American call/put, inspect Greeks and payoff, and stress the price across spot/volatility scenarios. |
+| [`/market`](quant/src/app/market/page.tsx) | Options Surface Monitor | Inspect delayed option-chain snapshots, quote quality, IV residuals, and the smile before transferring a contract into the pricer. |
+| [`/portfolio`](quant/src/app/portfolio/page.tsx) | Portfolio Risk Monitor | Construct a signed equity portfolio, estimate historical risk, simulate terminal returns, and compare it with the mean-variance opportunity set. |
 
-- **Performance Visualization**  
-  - Interactive pie charts for position distribution
-  - Monte Carlo simulation histograms
-  - Performance metrics dashboard
+The workspaces are deliberately connected: a surfaced option contract can seed the pricer, while the portfolio monitor preserves positions and recent analysis locally for iterative research.
 
-- **Data Persistence**  
-  - Local storage caching for positions
-  - Cached analysis results with automatic refresh
-  - Persistent form data across sessions
-  - Server-side portfolio storage
+## Data and persistence
 
----
+- **Manual-first:** pricing works with a manually entered spot and no third-party account. If a quote request fails, the model remains usable with the last manual inputs.
+- **Delayed market data:** optional quote, candle, and option-chain requests use Market Data on the server. The UI exposes snapshot time and provider credit metadata rather than presenting delayed data as live.
+- **No cloud portfolio database:** positions, calculator inputs, and recent portfolio results are stored in the browser's local storage. AWS/database credentials are not required.
+- **No execution path:** this is a research terminal. It does not place orders, hold brokerage credentials, or provide investment advice.
 
-## Project Structure
+## Engineering highlights
 
-```
-quant/
-├── src/
-│   ├── app/
-│   │   ├── api/
-│   │   │   ├── auth/
-│   │   │   │   ├── login/route.ts    # POST /api/auth/login → user authentication
-│   │   │   │   └── signup/route.ts   # POST /api/auth/signup → user registration
-│   │   │   ├── user/
-│   │   │   │   └── portfolio/route.ts # User portfolio management endpoints
-│   │   │   ├── options/route.ts      # GET /api/options → fetch option chain
-│   │   │   ├── price/route.ts        # POST /api/price  → compute price & Greeks
-│   │   │   ├── portfolio/route.ts    # POST /api/portfolio → analyze portfolio
-│   │   │   └── stocks/route.ts       # GET /api/stocks → fetch stock prices
-│   │   ├── portfolio/
-│   │   │   └── page.tsx              # Portfolio analysis UI
-│   │   └── page.tsx                  # Options pricing UI
-│   ├── components/
-│   │   ├── PayoffDiagram.tsx         # Reusable payoff chart component
-│   │   └── PortfolioMetrics.tsx      # Portfolio metrics display
-│   └── lib/
-│       ├── auth.ts                   # Authentication utilities
-│       ├── db.ts                     # Database connection & queries
-│       └── calculations.ts           # Financial calculations utilities
-├── .env                             # Environment variables
-└── package.json                     # Dependencies & scripts
+- Strict TypeScript and runtime validation at HTTP boundaries
+- Server-only Bearer authentication; keys never appear in browser code or request URLs
+- Typed Market Data REST adapter with response validation, request timeouts, bounded exponential retries, and credit-budget metadata
+- Numerical domain checks that fail explicitly instead of emitting `NaN`
+- Unit and contract tests for authentication, retries, credit metadata, response normalization, put-call parity, CRR convergence, IV recovery, position direction, drawdown, VaR, and deterministic simulation
+- CI gates for lint, typecheck, tests, and production build
+
+## Architecture
+
+```text
+quant/src/
+├── app/
+│   ├── api/
+│   │   ├── options/route.ts     # normalized option chain + local IV diagnostics
+│   │   ├── portfolio/route.ts   # validates positions, fetches aligned histories
+│   │   ├── price/route.ts       # validates and prices option requests
+│   │   └── stocks/route.ts      # delayed single-ticker snapshot adapter
+│   ├── market/page.tsx          # delayed volatility-surface monitor
+│   ├── portfolio/page.tsx       # portfolio construction and risk dashboard
+│   └── page.tsx                 # option-pricing workbench
+├── lib/
+│   ├── efficientFrontier.ts     # covariance, opportunity set, frontier, and CML
+│   ├── marketDataClient.ts      # authenticated, credit-aware REST boundary
+│   ├── monteCarlo.ts            # seeded log-return simulation
+│   ├── optionChain.ts            # quote quality and IV analytics
+│   ├── optionPriceSurface.ts     # deterministic BSM sensitivity grid
+│   ├── portfolioCalculations.ts # pure portfolio analytics
+│   └── stockData.ts             # market-data boundary
+└── utils/pricing.ts             # pure BSM and CRR models
 ```
 
----
+The UI depends on route contracts, routes orchestrate external data, and all financial calculations live in pure modules with focused tests.
 
-## Installation
+The market-data adapter follows Market Data's official [authentication](https://www.marketdata.app/docs/api/authentication/), [stock candle](https://www.marketdata.app/docs/api/stocks/candles/), [delayed stock quote](https://www.marketdata.app/docs/api/stocks/quotes/), and [option-chain](https://www.marketdata.app/docs/api/options/chain/) contracts. Chain requests are limited to one side and the 40 strikes nearest the money to preserve the free daily credit budget.
 
-1. **Clone the repo**  
-   ```bash
-   git clone https://github.com/BhavyaJohar/Options.git
-   cd Options/quant
-   ```
+## Run locally
 
-2. **Install dependencies**  
-   ```bash
-   npm install
-   # or
-   yarn install
-   ```
+Requires Node.js 22+.
 
-3. **Configure environment**  
-   Create a `.env` file at the project root:
-   ```env
-   NEXT_PUBLIC_POLYGON_API_KEY=your_polygon_api_key_here
-   DB_HOST=your_db_host
-   DB_PORT=your_db_port
-   DB_USER=your_db_user
-   DB_PASSWORD=your_db_password
-   DB_NAME=your_db_name
-   ```
+```bash
+cd quant
+npm ci
+npm run dev
+```
 
----
+Open [http://localhost:3000](http://localhost:3000). The options calculator starts with a manual spot value and needs no configuration.
 
-## Usage
+The AAPL quote, history, and option-chain demo works without credentials. For other symbols, copy the example environment file and add a [free Market Data token](https://www.marketdata.app/docs/account/plans/free-forever/):
 
-- **Start development server**  
-  ```bash
-  npm run dev
-  # or
-  yarn dev
-  ```
-  The app will be available at `http://localhost:3000`.
+```bash
+cp .env.example .env.local
+```
 
-- **Build for production**  
-  ```bash
-  npm run build
-  npm start
-  # or
-  yarn build
-  yarn start
-  ```
+```env
+MARKETDATA_TOKEN=your_token
+```
 
----
+`MARKETDATA_TOKEN` is intentionally server-only; do not rename it with a `NEXT_PUBLIC_` prefix. The Free Forever plan currently provides 100 daily credits, 24-hour-delayed data, and one year of history. The interface displays provider timestamps and requests only 40 near-the-money contracts at a time.
 
-## API Endpoints
+## Verify
 
-### `/api/auth/login` (POST)
-Authenticates a user and returns a session token.
+```bash
+npm run check
+npm run build
+```
 
-### `/api/auth/signup` (POST)
-Creates a new user account.
+Or run the checks independently:
 
-### `/api/user/portfolio` (GET/POST)
-Manages user portfolios (list, save, load).
+```bash
+npm run lint
+npm run typecheck
+npm test
+```
 
-### `/api/options` (GET)
-Fetches the options chain for a given stock ticker.
+## Model assumptions and limitations
 
-### `/api/price` (POST)
-Computes theoretical option price and Greeks via both Black‑Scholes and a Binomial Tree.
-
-### `/api/portfolio` (POST)
-Analyzes portfolio performance and risk metrics.
-
-### `/api/stocks` (GET)
-Fetches current stock prices with caching support.
-
----
-
-## Technical Stack
-
-- **Frontend**: Next.js 14, React, TypeScript
-- **Styling**: Tailwind CSS
-- **Charts**: Recharts
-- **Data**: Polygon.io API
-- **Database**: PostgreSQL (AWS)
-- **Authentication**: bcryptjs
-- **State Management**: React Hooks
-- **Caching**: LocalStorage
-- **Deployment**: Vercel
-
----
-
-## Performance Optimizations
-
-- Client-side caching for stock prices and analysis results
-- Debounced API calls for stock lookups
-- Optimized Monte Carlo simulations
-- Responsive design for all device sizes
-- Efficient state management with React hooks
-
----
-
-## Contributing
-
-1. Fork the repository  
-2. Create a new branch: `git checkout -b feat/my-feature`  
-3. Commit your changes & push: `git push origin feat/my-feature`  
-4. Open a Pull Request
-
----
+- Black-Scholes-Merton assumes lognormal prices, constant volatility/rates/yield, frictionless markets, and European exercise.
+- The CRR model supports early exercise but still assumes constant model inputs over the tree.
+- The price heatmap is a Black-Scholes sensitivity grid, not a forecast or a historical scenario distribution.
+- Midpoint IV is a European BSM equivalent. American exercise, discrete dividends, stale/crossed quotes, and wide markets can create differences from the provider IV.
+- Portfolio histories use split-adjusted daily closes from Market Data and an SPY benchmark. Results depend on overlapping observations only.
+- Free-tier quotes and chains are research snapshots delayed by at least 24 hours. They are unsuitable for execution decisions.
+- VaR is historical and is not a maximum-loss estimate. The Monte Carlo model fits a normal distribution to daily log returns; it does not model volatility clustering, jumps, liquidity, fees, slippage, or market impact.
+- The efficient frontier is an in-sample, long-only approximation generated from arithmetic historical means and a sample covariance matrix. Estimation error, regime changes, transaction costs, constraints, and out-of-sample performance are not modeled.
+- This is a research and education tool, not investment advice or an execution system.
 
 ## License
 
-MIT License
-
----
-
-## Author
-
-[Bhavya Johar](https://bhavyarjohar.com) - Computer Science & Finance at UVA
-
----
+[MIT](LICENSE)

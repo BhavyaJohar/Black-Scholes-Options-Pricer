@@ -1,78 +1,49 @@
 import { NextResponse } from 'next/server';
-
-interface PolygonStockResponse {
-  ticker: string;
-  queryCount: number;
-  resultsCount: number;
-  adjusted: boolean;
-  results: Array<{
-    v: number;  // volume
-    vw: number; // volume weighted average price
-    o: number;  // open
-    c: number;  // close
-    h: number;  // high
-    l: number;  // low
-    t: number;  // timestamp
-    n: number;  // number of trades
-  }>;
-}
+import {
+  createMarketDataClient,
+  MarketDataApiError,
+  MarketDataResponseError,
+} from '@/lib/marketDataClient';
 
 export async function GET(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url);
-    const ticker = searchParams.get('ticker');
-
-    if (!ticker) {
-      return NextResponse.json(
-        { error: 'Missing ticker parameter' },
-        { status: 400 }
-      );
-    }
-
-    const apiKey = process.env.NEXT_PUBLIC_POLYGON_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: 'Missing Polygon API key' },
-        { status: 500 }
-      );
-    }
-
-    const response = await fetch(
-      `https://api.polygon.io/v2/aggs/ticker/${ticker.toUpperCase()}/prev?adjusted=true&apiKey=${apiKey}`
-    );
-
-    if (!response.ok) {
-      if (response.status === 404) {
-        return NextResponse.json(
-          { error: `Ticker ${ticker} not found` },
-          { status: 404 }
-        );
-      }
-      return NextResponse.json(
-        { error: 'Failed to fetch stock price' },
-        { status: response.status }
-      );
-    }
-
-    const data = await response.json() as PolygonStockResponse;
-    
-    if (!data.results || data.results.length === 0) {
-      return NextResponse.json(
-        { error: `No price data available for ${ticker}` },
-        { status: 404 }
-      );
-    }
-
-    return NextResponse.json({
-      price: data.results[0].c,
-      ticker: data.ticker,
-      timestamp: new Date(data.results[0].t).toISOString()
-    });
-  } catch (err) {
-    console.error('Error fetching stock price:', err);
+  const ticker = new URL(request.url).searchParams.get('ticker')?.trim().toUpperCase() ?? '';
+  if (!/^[A-Z][A-Z0-9./-]{0,9}$/.test(ticker)) {
     return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
+      { error: { code: 'INVALID_TICKER', message: 'Ticker must be 1-10 letters, digits, dots, slashes, or hyphens' } },
+      { status: 400 }
     );
   }
-} 
+
+  try {
+    const snapshot = await createMarketDataClient().getStockSnapshot(ticker);
+    return NextResponse.json(snapshot, {
+      headers: { 'Cache-Control': 'public, s-maxage=900, stale-while-revalidate=3600' },
+    });
+  } catch (error: unknown) {
+    if (error instanceof MarketDataApiError) {
+      return NextResponse.json(
+        {
+          error: {
+            code: error.status === 429 ? 'RATE_LIMITED' : error.status === 401 ? 'MARKET_DATA_TOKEN_REQUIRED' : 'MARKET_DATA_REQUEST_FAILED',
+            message: error.message,
+            retryable: error.retryable,
+            rateLimit: error.rateLimit,
+          },
+        },
+        { status: error.status === 404 ? 404 : error.status === 429 ? 429 : error.status === 401 ? 503 : 502 }
+      );
+    }
+    const message = error instanceof Error ? error.message : 'Market-data request failed';
+    const invalidResponse = error instanceof MarketDataResponseError;
+    return NextResponse.json(
+      {
+        error: {
+          code: invalidResponse ? 'INVALID_MARKET_DATA_RESPONSE' : 'MARKET_DATA_REQUEST_FAILED',
+          message,
+          retryable: false,
+        },
+      },
+      { status: 502 }
+    );
+  }
+}

@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Options & Portfolio Analysis | Black-Scholes & Portfolio Metrics",
+  title: "Options Risk Lab | Pricing, Volatility Surfaces & Portfolio Risk",
   description:
-    "A modern financial analysis tool built by Bhavya Johar. Calculate theoretical option prices using Black-Scholes and Binomial Tree models. Analyze portfolio performance with metrics like Alpha, Beta, Sharpe Ratio, and Monte Carlo simulations.",
+    "A quantitative research terminal built by Bhavya Johar: Black-Scholes and CRR pricing, delayed option-chain diagnostics, implied-volatility smiles, and portfolio risk analytics.",
   keywords: [
     "options pricing",
     "Black-Scholes calculator",
@@ -30,14 +30,16 @@ export const metadata: Metadata = {
     "monte carlo simulation",
     "portfolio metrics",
     "Bhavya Johar",
-    "options strategies"
+    "options strategies",
+    "implied volatility surface",
+    "Market Data API"
   ],
   authors: [{ name: "Bhavya Johar", url: "https://bhavyarjohar.com" }],
   creator: "Bhavya Johar",
   openGraph: {
-    title: "Options & Portfolio Analysis | Black-Scholes & Portfolio Metrics",
+    title: "Options Risk Lab | Pricing, Volatility Surfaces & Portfolio Risk",
     description:
-      "Interactive financial analysis tool built by Bhavya Johar. Features options pricing with Black-Scholes and Binomial models, plus comprehensive portfolio analysis with Alpha, Beta, Sharpe Ratio, and Monte Carlo simulations.",
+      "Quantitative options and portfolio research with delayed market-chain diagnostics, independent IV inversion, Black-Scholes, CRR, and risk analytics.",
     url: "https://bhavyas-options-pricing.vercel.app/",
     siteName: "Options & Portfolio Analysis",
     type: "website"
@@ -53,6 +55,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
+        suppressHydrationWarning
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         {children}
